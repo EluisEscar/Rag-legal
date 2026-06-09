@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+python-dotenv
+python-multipart
+pymupdf
+numpy
+groq
+supabase==1.2.0
+sentence-transformers==2.7.0
+transformers==4.40.0
+llama-index==0.10.68
+llama-index-embeddings-huggingface==0.2.3
+llama-index-vector-stores-qdrant==0.2.8
+qdrant-client==1.9.2
+huggingface_hub
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu

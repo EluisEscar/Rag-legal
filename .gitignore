@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+node_modules/
+qdrant/storage/
+.DS_Store
+backend/documentos_legales/
