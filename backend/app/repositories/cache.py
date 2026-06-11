@@ -1,5 +1,11 @@
-from db.client import supabase
 import hashlib
+import logging
+
+from app.repositories.client import supabase
+
+
+logger = logging.getLogger(__name__)
+
 
 def obtener_cache(pregunta: str) -> str | None:
     """Busca si la pregunta ya fue respondida antes"""
@@ -10,12 +16,12 @@ def obtener_cache(pregunta: str) -> str | None:
             .execute()
 
         if resultado.data:
-            print(f"✅ Respuesta desde caché — 0 tokens")
+            logger.info("Respuesta recuperada del cache exacto")
             return resultado.data[0]["respuesta"]
 
         return None
-    except Exception as e:
-        print(f"⚠ Error en caché: {e}")
+    except Exception:
+        logger.warning("Error consultando cache exacto", exc_info=True)
         return None
 
 def guardar_cache(pregunta: str, respuesta: str):
@@ -23,7 +29,7 @@ def guardar_cache(pregunta: str, respuesta: str):
     try:
         # Verificar si ya existe antes de insertar
         existe = supabase.table("cache_respuestas")\
-            .select("id")\
+            .select("id, hits")\
             .eq("pregunta", pregunta.strip().lower())\
             .execute()
 
@@ -41,20 +47,26 @@ def guardar_cache(pregunta: str, respuesta: str):
                 "hits":      1
             }).execute()
 
-    except Exception as e:
-        print(f"⚠ Error guardando caché: {e}")
+    except Exception:
+        logger.warning("Error guardando cache exacto", exc_info=True)
         
-def generar_clave_cache(pregunta: str, historial: list = None) -> str:
-    if not historial:
-        return pregunta.strip().lower()
+def generar_clave_cache(
+    pregunta: str,
+    user_id: str,
+    historial: list | None = None,
+) -> str:
+    partes_contexto = [
+        mensaje["content"].strip()
+        for mensaje in (historial or [])[-4:]
+        if mensaje.get("role") == "user" and mensaje.get("content")
+    ]
+    contexto = " ".join(partes_contexto)[:500]
+    contenido = "|".join(
+        [
+            user_id,
+            pregunta.strip().lower(),
+            contexto,
+        ]
+    )
 
-    contexto = " ".join([
-        msg["content"] for msg in historial[-4:]
-        if msg["role"] == "user"
-    ])
-
-    if len(contexto.split()) < 5:
-        return pregunta.strip().lower()
-
-    texto = f"{pregunta.strip().lower()}|{contexto[:200]}"
-    return hashlib.md5(texto.encode()).hexdigest()
+    return hashlib.sha256(contenido.encode("utf-8")).hexdigest()

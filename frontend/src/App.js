@@ -1,15 +1,39 @@
 import { useEffect, useRef, useState } from 'react'
-import { supabase } from './supabaseClient'
-import Login from './Login'
-import './App.css'
+import Login from './components/Login'
+import { authenticatedFetch, authenticatedJson } from './services/api'
+import { supabase } from './services/supabaseClient'
+import './styles/App.css'
 
 const API = 'http://localhost:8000'
 
-const CONVS_INICIALES = [
-  { id: 1, titulo: 'Derechos fundamentales', fecha: 'Hoy' },
-  { id: 2, titulo: 'Análisis de contrato laboral', fecha: 'Ayer' },
-  { id: 3, titulo: 'Hábeas corpus', fecha: '05 jun' },
-]
+const MENSAJE_INICIAL = {
+  rol: 'bot',
+  texto: 'Hola, soy tu asistente legal especializado en derecho peruano. Puedes hacerme consultas legales o subir un documento PDF para analizarlo.',
+}
+
+function formatearFecha(fecha) {
+  if (!fecha) return ''
+
+  const valor = new Date(fecha)
+  const hoy = new Date()
+  if (valor.toDateString() === hoy.toDateString()) return 'Hoy'
+
+  return valor.toLocaleDateString('es-PE', {
+    day: '2-digit',
+    month: 'short',
+  })
+}
+
+function convertirMensajes(historial) {
+  return historial.map((mensaje) => ({
+    rol: mensaje.role === 'user' ? 'user' : 'bot',
+    texto: mensaje.content,
+  }))
+}
+
+function claveConversacionActiva(userId) {
+  return `lexperu:conversacion-activa:${userId}`
+}
 
 function Icon({ name, size = 20 }) {
   const paths = {
@@ -89,23 +113,29 @@ export default function App() {
   const [cargandoAuth, setCargandoAuth] = useState(true)
 
   // ── Chat ──
-  const [mensajes,    setMensajes]    = useState([{
-    rol:   'bot',
-    texto: 'Hola, soy tu asistente legal especializado en derecho peruano. Puedes hacerme consultas legales o subir un documento PDF para analizarlo.',
-  }])
+  const [mensajes,    setMensajes]    = useState([MENSAJE_INICIAL])
   const [pregunta,    setPregunta]    = useState('')
   const [archivo,     setArchivo]     = useState(null)
   const [cargando,    setCargando]    = useState(false)
+  const [cargandoHistorial, setCargandoHistorial] = useState(false)
   const [subiendo,    setSubiendo]    = useState(false)
-  const [darkMode,    setDarkMode]    = useState(false)
-  const [convActiva,  setConvActiva]  = useState(1)
-  const [convs,       setConvs]       = useState(CONVS_INICIALES)
+  const [darkMode,    setDarkMode]    = useState(
+    () => {
+      const temaGuardado = localStorage.getItem('lexperu:tema')
+      if (temaGuardado) return temaGuardado === 'dark'
+      return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
+    }
+  )
+  const [convActiva,  setConvActiva]  = useState(null)
+  const [convs,       setConvs]       = useState([])
   const [menuAbierto, setMenuAbierto] = useState(null)
   const [modalRename, setModalRename] = useState(null)
   const [nuevoNombre, setNuevoNombre] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const bottomRef = useRef(null)
   const fileRef   = useRef(null)
+  const historialesCache = useRef(new Map())
+  const usuarioId = usuario?.id
 
   // ── Verificar sesión activa al cargar ──
   useEffect(() => {
@@ -123,7 +153,75 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (!usuarioId) {
+      historialesCache.current.clear()
+      setConvs([])
+      setConvActiva(null)
+      setMensajes([MENSAJE_INICIAL])
+      return
+    }
+
+    let cancelado = false
+
+    const cargarConversaciones = async () => {
+      try {
+        const conversaciones = await authenticatedJson(
+          `${API}/conversaciones`
+        )
+        if (cancelado) return
+
+        const normalizadas = conversaciones.map((conversacion) => ({
+          ...conversacion,
+          fecha: formatearFecha(
+            conversacion.updated_at ?? conversacion.created_at
+          ),
+        }))
+        setConvs(normalizadas)
+
+        if (normalizadas.length > 0) {
+          const idGuardado = localStorage.getItem(
+            claveConversacionActiva(usuarioId)
+          )
+          const seleccionada = normalizadas.find(
+            (conversacion) => conversacion.id === idGuardado
+          ) ?? normalizadas[0]
+          const historial = await authenticatedJson(
+            `${API}/conversaciones/${seleccionada.id}/mensajes`
+          )
+          if (cancelado) return
+          setConvActiva(seleccionada.id)
+          localStorage.setItem(
+            claveConversacionActiva(usuarioId),
+            seleccionada.id
+          )
+          const mensajesIniciales = historial.length > 0
+            ? convertirMensajes(historial)
+            : [MENSAJE_INICIAL]
+          historialesCache.current.set(
+            seleccionada.id,
+            mensajesIniciales
+          )
+          setMensajes([...mensajesIniciales])
+        }
+      } catch (error) {
+        if (!cancelado) {
+          setMensajes([{
+            rol: 'bot',
+            texto: `No se pudo cargar el historial: ${error.message}`,
+          }])
+        }
+      }
+    }
+
+    cargarConversaciones()
+    return () => {
+      cancelado = true
+    }
+  }, [usuarioId])
+
+  useEffect(() => {
     document.body.classList.toggle('dark', darkMode)
+    localStorage.setItem('lexperu:tema', darkMode ? 'dark' : 'light')
   }, [darkMode])
 
   useEffect(() => {
@@ -141,8 +239,26 @@ export default function App() {
     setUsuario(null)
   }
 
-  // SESSION_ID real del usuario autenticado
-  const SESSION_ID = usuario?.id ?? 'sesion-default'
+  const crearConversacion = async (titulo = 'Nueva consulta') => {
+    const form = new FormData()
+    form.append('titulo', titulo)
+    const conversacion = await authenticatedJson(`${API}/conversaciones`, {
+      method: 'POST',
+      body: form,
+    })
+    const nueva = {
+      ...conversacion,
+      fecha: 'Hoy',
+    }
+    setConvs((actuales) => [nueva, ...actuales])
+    setConvActiva(nueva.id)
+    historialesCache.current.set(nueva.id, [])
+    localStorage.setItem(
+      claveConversacionActiva(usuario.id),
+      nueva.id
+    )
+    return nueva
+  }
 
   // ── Subir archivo ──
   const subirArchivo = async (e) => {
@@ -152,11 +268,13 @@ export default function App() {
     setMensajes((m) => [...m, { rol: 'pdf', texto: file.name }])
 
     const form = new FormData()
-    form.append('archivo',    file)
-    form.append('session_id', SESSION_ID)
+    form.append('archivo', file)
 
     try {
-      const res  = await fetch(`${API}/subir-documento`, { method: 'POST', body: form })
+      const res = await authenticatedFetch(`${API}/subir-documento`, {
+        method: 'POST',
+        body: form,
+      })
       const data = await res.json()
 
       if (data.ok) {
@@ -181,19 +299,33 @@ export default function App() {
 
   // ── Enviar pregunta ──
   const enviar = async () => {
-    if (!pregunta.trim() || cargando) return
+    if (!pregunta.trim() || cargando || cargandoHistorial) return
     const preguntaActual = pregunta
     setPregunta('')
-    setMensajes((m) => [...m, { rol: 'user', texto: preguntaActual }])
+    const mensajeUsuario = { rol: 'user', texto: preguntaActual }
+    setMensajes((actuales) => [...actuales, mensajeUsuario])
     setCargando(true)
 
     try {
-      const form = new FormData()
-      form.append('pregunta',   preguntaActual)
-      form.append('session_id', SESSION_ID)
+      let conversacionId = convActiva
+      if (!conversacionId) {
+        const nueva = await crearConversacion()
+        conversacionId = nueva.id
+      }
 
-      const res  = await fetch(`${API}/preguntar`, { method: 'POST', body: form })
+      const form = new FormData()
+      form.append('pregunta', preguntaActual)
+      form.append('conversacion_id', conversacionId)
+
+      const res = await authenticatedFetch(`${API}/preguntar`, {
+        method: 'POST',
+        body: form,
+      })
       const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data.detail ?? data.error ?? 'Error del servidor')
+      }
 
       setMensajes((m) => [...m, {
         rol:   'bot',
@@ -201,10 +333,36 @@ export default function App() {
           ? data.error + (data.tip ? `\n\nSugerencia: ${data.tip}` : '')
           : data.respuesta,
       }])
-    } catch {
+      const mensajesActuales = historialesCache.current.get(
+        conversacionId
+      ) ?? []
+      historialesCache.current.set(
+        conversacionId,
+        [
+          ...mensajesActuales,
+          mensajeUsuario,
+          {
+            rol: 'bot',
+            texto: data.error
+              ? data.error + (
+                data.tip ? `\n\nSugerencia: ${data.tip}` : ''
+              )
+              : data.respuesta,
+          },
+        ]
+      )
+      setConvs((actuales) => {
+        const activa = actuales.find((conv) => conv.id === conversacionId)
+        if (!activa) return actuales
+        return [
+          { ...activa, fecha: 'Hoy' },
+          ...actuales.filter((conv) => conv.id !== conversacionId),
+        ]
+      })
+    } catch (error) {
       setMensajes((m) => [...m, {
         rol:   'bot',
-        texto: 'No se pudo conectar con el servidor. Inténtalo nuevamente.',
+        texto: `No se pudo completar la consulta: ${error.message}`,
       }])
     } finally {
       setCargando(false)
@@ -224,22 +382,68 @@ export default function App() {
     e.target.style.height = `${Math.min(e.target.scrollHeight, 140)}px`
   }
 
-  const nuevaConversacion = () => {
-    const nueva = { id: Date.now(), titulo: 'Nueva consulta', fecha: 'Hoy' }
-    setConvs((c) => [nueva, ...c])
-    setConvActiva(nueva.id)
-    setMensajes([{
-      rol:   'bot',
-      texto: 'Nueva conversación iniciada. ¿En qué asunto legal puedo ayudarte?',
-    }])
-    setArchivo(null)
-    setPregunta('')
-    setSidebarOpen(false)
+  const nuevaConversacion = async () => {
+    try {
+      const nueva = await crearConversacion()
+      const mensajesNuevaConversacion = [{
+        rol: 'bot',
+        texto: 'Nueva conversación iniciada. ¿En qué asunto legal puedo ayudarte?',
+      }]
+      historialesCache.current.set(
+        nueva.id,
+        mensajesNuevaConversacion
+      )
+      setMensajes(mensajesNuevaConversacion)
+      setArchivo(null)
+      setPregunta('')
+      setSidebarOpen(false)
+    } catch (error) {
+      setMensajes([{
+        rol: 'bot',
+        texto: `No se pudo crear la conversación: ${error.message}`,
+      }])
+    }
   }
 
-  const seleccionarConversacion = (id) => {
-    setConvActiva(id)
-    setSidebarOpen(false)
+  const seleccionarConversacion = async (id) => {
+    if (id === convActiva || cargando || cargandoHistorial) return
+
+    const historialCacheado = historialesCache.current.get(id)
+    if (historialCacheado) {
+      setConvActiva(id)
+      localStorage.setItem(
+        claveConversacionActiva(usuario.id),
+        id
+      )
+      setMensajes([...historialCacheado])
+      setSidebarOpen(false)
+      return
+    }
+
+    setCargandoHistorial(true)
+    try {
+      const historial = await authenticatedJson(
+        `${API}/conversaciones/${id}/mensajes`
+      )
+      setConvActiva(id)
+      localStorage.setItem(
+        claveConversacionActiva(usuario.id),
+        id
+      )
+      const mensajesRecuperados = historial.length > 0
+        ? convertirMensajes(historial)
+        : [MENSAJE_INICIAL]
+      historialesCache.current.set(id, mensajesRecuperados)
+      setMensajes([...mensajesRecuperados])
+      setSidebarOpen(false)
+    } catch (error) {
+      setMensajes([{
+        rol: 'bot',
+        texto: `No se pudo cargar la conversación: ${error.message}`,
+      }])
+    } finally {
+      setCargandoHistorial(false)
+    }
   }
 
   const abrirMenu = (e, id) => {
@@ -254,22 +458,55 @@ export default function App() {
     setNuevoNombre(conv.titulo)
   }
 
-  const confirmarRename = () => {
+  const confirmarRename = async () => {
     if (!nuevoNombre.trim()) return
-    setConvs((c) => c.map((conv) => (
-      conv.id === modalRename ? { ...conv, titulo: nuevoNombre.trim() } : conv
-    )))
-    setModalRename(null)
-    setNuevoNombre('')
+    const titulo = nuevoNombre.trim()
+
+    try {
+      const form = new FormData()
+      form.append('titulo', titulo)
+      await authenticatedJson(`${API}/conversaciones/${modalRename}`, {
+        method: 'PUT',
+        body: form,
+      })
+      setConvs((actuales) => actuales.map((conv) => (
+        conv.id === modalRename ? { ...conv, titulo } : conv
+      )))
+      setModalRename(null)
+      setNuevoNombre('')
+    } catch (error) {
+      setMensajes((actuales) => [...actuales, {
+        rol: 'bot',
+        texto: `No se pudo renombrar: ${error.message}`,
+      }])
+    }
   }
 
-  const eliminarConv = (e, id) => {
+  const eliminarConv = async (e, id) => {
     e.stopPropagation()
     setMenuAbierto(null)
-    setConvs((c) => c.filter((conv) => conv.id !== id))
-    if (convActiva === id) {
-      setConvActiva(null)
-      setMensajes([{ rol: 'bot', texto: 'Selecciona una conversación o crea una nueva.' }])
+
+    try {
+      await authenticatedJson(`${API}/conversaciones/${id}`, {
+        method: 'DELETE',
+      })
+      setConvs((actuales) => actuales.filter((conv) => conv.id !== id))
+      historialesCache.current.delete(id)
+      if (convActiva === id) {
+        setConvActiva(null)
+        localStorage.removeItem(
+          claveConversacionActiva(usuario.id)
+        )
+        setMensajes([{
+          rol: 'bot',
+          texto: 'Selecciona una conversación o crea una nueva.',
+        }])
+      }
+    } catch (error) {
+      setMensajes((actuales) => [...actuales, {
+        rol: 'bot',
+        texto: `No se pudo eliminar: ${error.message}`,
+      }])
     }
   }
 
@@ -377,10 +614,16 @@ export default function App() {
 
         <div className="sidebar-footer">
           <div className="profile-avatar">
-            {usuario.email?.charAt(0).toUpperCase() ?? 'A'}
+            {(usuario.user_metadata?.full_name ?? usuario.email)
+              ?.charAt(0)
+              .toUpperCase() ?? 'A'}
           </div>
           <div className="profile-copy">
-            <strong>{usuario.email?.split('@')[0] ?? 'Abogado'}</strong>
+            <strong>
+              {usuario.user_metadata?.full_name
+                ?? usuario.email?.split('@')[0]
+                ?? 'Abogado'}
+            </strong>
             <span>{usuario.email}</span>
           </div>
           <button
@@ -490,7 +733,7 @@ export default function App() {
               onChange={handleTextarea}
               onKeyDown={handleKeyDown}
               placeholder="Escribe tu consulta legal..."
-              disabled={cargando}
+              disabled={cargando || cargandoHistorial}
               aria-label="Consulta legal"
             />
             <div className="composer-actions">
@@ -514,7 +757,7 @@ export default function App() {
               <button
                 className="btn-send"
                 onClick={enviar}
-                disabled={cargando || !pregunta.trim()}
+                disabled={cargando || cargandoHistorial || !pregunta.trim()}
                 aria-label="Enviar consulta"
               >
                 <Icon name="send" size={18} />

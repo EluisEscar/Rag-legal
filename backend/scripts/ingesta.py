@@ -1,16 +1,15 @@
 from llama_index.core import VectorStoreIndex, Document, Settings, StorageContext
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.embeddings import BaseEmbedding
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
-from sentence_transformers import SentenceTransformer
 from huggingface_hub import login
-from typing import List
-import fitz
 import os
 import sys
 from dotenv import load_dotenv
+
+from app.services.embeddings import EmbeddingPersonalizado
+from app.services.pdf import extraer_texto_pdf
 
 load_dotenv()
 
@@ -21,37 +20,6 @@ DIMENSION    = 768
 CARPETA_PDFS = "./documentos_legales"
 
 # ── Embedding personalizado ──
-class EmbeddingPersonalizado(BaseEmbedding):
-    _modelo: SentenceTransformer = None
-
-    def __init__(self, nombre_modelo: str, **kwargs):
-        super().__init__(**kwargs)
-        object.__setattr__(self, '_modelo',
-            SentenceTransformer(nombre_modelo))
-
-    def _get_query_embedding(self, query: str) -> List[float]:
-        return self._modelo.encode(query).tolist()
-
-    def _get_text_embedding(self, text: str) -> List[float]:
-        return self._modelo.encode(text).tolist()
-
-    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-        return self._modelo.encode(texts).tolist()
-
-    async def _aget_query_embedding(self, query: str) -> List[float]:
-        return self._get_query_embedding(query)
-
-    async def _aget_text_embedding(self, text: str) -> List[float]:
-        return self._get_text_embedding(text)
-
-def extraer_texto_pdf(ruta: str) -> str:
-    doc = fitz.open(ruta)
-    texto = ""
-    for pagina in doc:
-        texto += pagina.get_text()
-    doc.close()
-    return texto
-
 def main():
     # 1. Login HuggingFace
     hf_token = os.getenv("HF_TOKEN")
@@ -124,7 +92,8 @@ def main():
         ruta = os.path.join(CARPETA_PDFS, pdf)
         print(f"\n📄 Procesando: {pdf}")
 
-        texto = extraer_texto_pdf(ruta)
+        with open(ruta, "rb") as archivo:
+            texto = extraer_texto_pdf(archivo.read())
         if not texto.strip():
             print(f"   ⚠ Sin texto extraíble, saltando...")
             continue
