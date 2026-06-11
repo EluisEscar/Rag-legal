@@ -90,3 +90,28 @@ def actualizar_timestamp(conversacion_id: str):
             .execute()
     except Exception as e:
         print(f"⚠ Error actualizando timestamp: {e}")
+        
+def guardar_resumen(conversacion_id: str, resumen: str):
+    """Guarda el resumen de la conversación"""
+    try:
+        supabase.table("conversaciones")\
+            .update({"resumen": resumen})\
+            .eq("id", conversacion_id)\
+            .execute()
+    except Exception as e:
+        print(f"⚠ Error guardando resumen: {e}")
+
+def obtener_resumen(conversacion_id: str) -> str:
+    """Obtiene el resumen guardado de la conversación"""
+    try:
+        resultado = supabase.table("conversaciones")\
+            .select("resumen")\
+            .eq("id", conversacion_id)\
+            .execute()
+
+        if resultado.data and resultado.data[0].get("resumen"):
+            return resultado.data[0]["resumen"]
+        return ""
+    except Exception as e:
+        print(f"⚠ Error obteniendo resumen: {e}")
+        return ""

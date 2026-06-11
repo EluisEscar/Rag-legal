@@ -21,7 +21,7 @@ from groq import Groq
 
 # ── Supabase
 from db.client   import supabase as sb
-from db.cache    import obtener_cache, guardar_cache
+from db.cache    import obtener_cache, guardar_cache, generar_clave_cache
 from db.historial import (
     crear_conversacion,
     guardar_mensaje,
@@ -29,12 +29,20 @@ from db.historial import (
     obtener_conversaciones,
     renombrar_conversacion,
     eliminar_conversacion,
-    actualizar_timestamp
+    actualizar_timestamp,
+    guardar_resumen,        
+    obtener_resumen        
 )
+
+from resumidor import resumir_historial
 
 # PyMuPDF
 import fitz
 import os
+
+from clasificador import elegir_modelo
+
+from cache_semantico import buscar_cache_semantico, guardar_cache_semantico
 
 # ── Wrapper: SentenceTransformer → LlamaIndex ──
 class EmbeddingPersonalizado(BaseEmbedding):
@@ -230,30 +238,60 @@ async def preguntar(
     session_id:      str = Form(default="sesion-default"),
     conversacion_id: str = Form(default=None)
 ):
-    # Debug temporal
     print(f"🔍 conversacion_id recibido: {conversacion_id}")
     print(f"🔍 session_id recibido: {session_id}")
-    
-    # 1. Verificar caché primero — 0 tokens
-    respuesta_cacheada = obtener_cache(pregunta)
-    if respuesta_cacheada:
-        if conversacion_id:
-            guardar_mensaje(conversacion_id, "user", pregunta)
-            guardar_mensaje(conversacion_id, "bot",  respuesta_cacheada)
-            actualizar_timestamp(conversacion_id)
-        return {
-            "pregunta":      pregunta,
-            "respuesta":     respuesta_cacheada,
-            "chunks":        [],
-            "desde_cache":   True,
-            "tokens_usados": {"prompt": 0, "completion": 0, "total": 0}
-        }
 
-    sesion      = app.state.sesiones.get(session_id)
-    motor_legal = app.state.motor_legal
+    sesion         = app.state.sesiones.get(session_id)
+    motor_legal    = app.state.motor_legal
+    tiene_documento = sesion is not None
+
+    # ── Historial temprano para generar clave de caché ──
+    historial_temp = []
+    if conversacion_id:
+        historial_temp = obtener_historial(conversacion_id, limite=4)
+    elif sesion:
+        historial_temp = sesion["historial"][-4:]
+
+    # Generar clave de caché considerando el contexto
+    clave_cache = generar_clave_cache(pregunta, historial_temp)
+    print(f"🔑 Clave caché: {clave_cache[:30]}...")
+
+    # 1. Caché exacto — solo si NO hay documento subido
+    if not tiene_documento:
+        respuesta_cacheada = obtener_cache(clave_cache)
+        if respuesta_cacheada:
+            if conversacion_id:
+                guardar_mensaje(conversacion_id, "user", pregunta)
+                guardar_mensaje(conversacion_id, "bot",  respuesta_cacheada)
+                actualizar_timestamp(conversacion_id)
+            return {
+                "pregunta":      pregunta,
+                "respuesta":     respuesta_cacheada,
+                "chunks":        [],
+                "desde_cache":   True,
+                "tipo_cache":    "exacto",
+                "tokens_usados": {"prompt": 0, "completion": 0, "total": 0}
+            }
+
+        # 2. Caché semántico — solo si NO hay documento subido
+        respuesta_semantica = buscar_cache_semantico(pregunta)
+        if respuesta_semantica:
+            if conversacion_id:
+                guardar_mensaje(conversacion_id, "user", pregunta)
+                guardar_mensaje(conversacion_id, "bot",  respuesta_semantica)
+                actualizar_timestamp(conversacion_id)
+            return {
+                "pregunta":      pregunta,
+                "respuesta":     respuesta_semantica,
+                "chunks":        [],
+                "desde_cache":   True,
+                "tipo_cache":    "semantico",
+                "tokens_usados": {"prompt": 0, "completion": 0, "total": 0}
+            }
+
     chunks_relevantes = []
 
-    # 2. Buscar en documento subido (FAISS)
+    # 3. Buscar en documento subido (FAISS)
     if sesion:
         resultado_doc = sesion["motor"].query(pregunta)
         if hasattr(resultado_doc, "source_nodes"):
@@ -265,7 +303,7 @@ async def preguntar(
                     "fuente":   "documento_abogado"
                 })
 
-    # 3. Buscar en base legal (Qdrant)
+    # 4. Buscar en base legal (Qdrant)
     if motor_legal:
         resultado_legal = motor_legal.query(pregunta)
         if hasattr(resultado_legal, "source_nodes"):
@@ -286,31 +324,56 @@ async def preguntar(
 
     contexto = construir_contexto(chunks_relevantes)
 
-    # 4. Historial desde Supabase si hay conversacion_id
+    # 5. Historial completo con resumen automático
     if conversacion_id:
-        historial = obtener_historial(conversacion_id, limite=4)
+        historial_raw = obtener_historial(conversacion_id, limite=100)
+
+        if len(historial_raw) > 10:
+            print(f"📝 Historial largo ({len(historial_raw)} msgs) — resumiendo...")
+            mensajes_antiguos = historial_raw[:-4]
+            ultimos_4         = historial_raw[-4:]
+
+            resumen = resumir_historial(mensajes_antiguos)
+            guardar_resumen(conversacion_id, resumen)
+            print(f"📝 Resumen guardado: {resumen[:80]}...")
+
+            historial = []
+            if resumen:
+                historial.append({
+                    "role":    "system",
+                    "content": f"Resumen de la conversación anterior: {resumen}"
+                })
+            historial.extend(ultimos_4)
+        else:
+            historial = historial_raw
     else:
         historial = sesion["historial"][-4:] if sesion else []
 
+    # 6. Construir mensajes para GROQ
     mensajes = [{
         "role":    "system",
         "content": construir_prompt(pregunta, contexto)
     }]
     for msg in historial:
         mensajes.append(msg)
-    mensajes.append({"role": "user", "content": pregunta})
+    mensajes.append({
+        "role":    "user",
+        "content": pregunta
+    })
 
-    # 5. GROQ genera la respuesta
+    # 7. GROQ genera la respuesta
     print(f"🤖 Enviando a GROQ: {pregunta[:50]}...")
+    modelo, tipo_pregunta = elegir_modelo(pregunta)
+    print(f"🧠 Pregunta {tipo_pregunta} → modelo: {modelo}")
     respuesta_groq = app.state.groq.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=modelo,
         messages=mensajes,
         max_tokens=1000,
         temperature=0.1
     )
     respuesta_texto = respuesta_groq.choices[0].message.content
 
-    # 6. Guardar historial
+    # 8. Guardar historial
     if conversacion_id:
         guardar_mensaje(conversacion_id, "user", pregunta)
         guardar_mensaje(conversacion_id, "bot",  respuesta_texto)
@@ -319,8 +382,10 @@ async def preguntar(
         sesion["historial"].append({"role": "user",      "content": pregunta})
         sesion["historial"].append({"role": "assistant", "content": respuesta_texto})
 
-    # 7. Guardar en caché
-    guardar_cache(pregunta, respuesta_texto)
+    # 9. Guardar en caché solo si NO hay documento subido
+    if not tiene_documento:
+        guardar_cache(clave_cache, respuesta_texto)
+        guardar_cache_semantico(pregunta, respuesta_texto)
 
     print(f"✅ Respuesta generada ({len(respuesta_texto)} chars)")
 
@@ -329,13 +394,16 @@ async def preguntar(
         "respuesta":     respuesta_texto,
         "chunks":        chunks_relevantes,
         "desde_cache":   False,
+        "tipo_cache":    "ninguno",
+        "tipo_pregunta": tipo_pregunta,
+        "modelo_usado":  modelo,
         "tokens_usados": {
             "prompt":     respuesta_groq.usage.prompt_tokens,
             "completion": respuesta_groq.usage.completion_tokens,
             "total":      respuesta_groq.usage.total_tokens
         }
     }
-
+    
 @app.get("/sesiones")
 def listar_sesiones():
     return {
