@@ -1,6 +1,10 @@
+import json
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
 from app.core.auth import CurrentUser, get_current_user
+from app.core.validation import clean_optional_uuid, clean_text
 from app.repositories.cache import (
     generar_clave_cache,
     guardar_cache,
@@ -21,17 +25,24 @@ from app.services.clasificador import elegir_modelo
 from app.services.prompts import construir_contexto, construir_prompt
 from app.services.resumidor import resumir_historial
 
-
 router = APIRouter(tags=["preguntas"])
 
-
 @router.post("/preguntar")
-def preguntar(
+async def preguntar(
     request: Request,
     pregunta: str = Form(..., min_length=1, max_length=4000),
     conversacion_id: str = Form(default=None),
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    pregunta = clean_text(
+        pregunta,
+        field="pregunta",
+        max_length=4000,
+    )
+    conversacion_id = clean_optional_uuid(
+        conversacion_id,
+        field="conversacion_id",
+    )
     session_id = current_user.id
     if conversacion_id and not conversacion_pertenece_a_usuario(
         conversacion_id,
@@ -147,52 +158,59 @@ def preguntar(
     ]
 
     modelo, tipo_pregunta = elegir_modelo(pregunta)
-    respuesta_groq = request.app.state.groq.chat.completions.create(
-        model=modelo,
-        messages=mensajes,
-        max_tokens=1000,
-        temperature=0.1,
-    )
-    respuesta_texto = respuesta_groq.choices[0].message.content
 
-    if conversacion_id:
-        _guardar_interaccion(
-            conversacion_id,
-            pregunta,
-            respuesta_texto,
+    def generar_stream():
+        respuesta_completa = ""
+
+        stream = request.app.state.groq.chat.completions.create(  # ← .create()
+            model=modelo,
+            messages=mensajes,
+            max_tokens=1000,
+            temperature=0.1,
+            stream=True,  # ← esto activa el streaming
         )
-    elif sesion:
-        sesion["historial"].extend(
-            [
+
+        for chunk in stream:  # ← sin "with", directo
+            delta = chunk.choices[0].delta.content
+            if delta:
+                respuesta_completa += delta
+                yield json.dumps({
+                    "tipo": "chunk",
+                    "texto": delta,
+                }) + "\n"
+
+        if conversacion_id:
+            _guardar_interaccion(conversacion_id, pregunta, respuesta_completa)
+        elif sesion:
+            sesion["historial"].extend([
                 {"role": "user", "content": pregunta},
-                {"role": "assistant", "content": respuesta_texto},
-            ]
-        )
+                {"role": "assistant", "content": respuesta_completa},
+            ])
 
-    if not tiene_documento:
-        guardar_cache(clave_cache, respuesta_texto)
-        if permite_cache_semantico:
-            guardar_cache_semantico(
-                pregunta,
-                respuesta_texto,
-                current_user.id,
-            )
+        if not tiene_documento:
+            guardar_cache(clave_cache, respuesta_completa)
+            if permite_cache_semantico:
+                guardar_cache_semantico(
+                    pregunta,
+                    respuesta_completa,
+                    current_user.id,
+                )
 
-    return {
-        "pregunta": pregunta,
-        "respuesta": respuesta_texto,
-        "chunks": chunks_relevantes,
-        "desde_cache": False,
-        "tipo_cache": "ninguno",
-        "tipo_pregunta": tipo_pregunta,
-        "modelo_usado": modelo,
-        "tokens_usados": {
-            "prompt": respuesta_groq.usage.prompt_tokens,
-            "completion": respuesta_groq.usage.completion_tokens,
-            "total": respuesta_groq.usage.total_tokens,
-        },
-    }
+        yield json.dumps({
+            "tipo": "fin",
+            "pregunta": pregunta,
+            "chunks": chunks_relevantes,
+            "desde_cache": False,
+            "tipo_cache": "ninguno",
+            "tipo_pregunta": tipo_pregunta,
+            "modelo_usado": modelo,
+        }) + "\n"
 
+
+    return StreamingResponse(
+        generar_stream(),
+        media_type="application/x-ndjson",
+    )
 
 def _extraer_chunks(resultado, fuente_predeterminada: str) -> list:
     if not hasattr(resultado, "source_nodes"):

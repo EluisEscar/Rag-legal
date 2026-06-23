@@ -11,6 +11,7 @@ from app.api.sesiones import router as sesiones_router
 from app.core.lifespan import lifespan
 from app.core.config import get_settings
 from app.core.errors import RepositoryError
+from app.core.rate_limit import RateLimitMiddleware
 
 
 logging.basicConfig(
@@ -30,6 +31,15 @@ app.add_middleware(
     allow_origins=list(settings.cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+app.add_middleware(
+    RateLimitMiddleware,
+    request_limit=settings.rate_limit_requests,
+    request_window_seconds=settings.rate_limit_window_seconds,
+    auth_attempt_limit=settings.auth_rate_limit_attempts,
+    auth_window_seconds=settings.auth_rate_limit_window_seconds,
+    max_request_bytes=settings.max_request_bytes,
 )
 
 app.include_router(documentos_router)

@@ -28,7 +28,7 @@ class AuthTests(unittest.TestCase):
         )
 
         with patch.object(
-            auth.supabase.auth,
+            auth.supabase_auth.auth,
             "get_user",
             return_value=response,
         ):

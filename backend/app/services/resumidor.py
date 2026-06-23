@@ -15,7 +15,7 @@ def resumir_historial(
 
     lineas = []
     for mensaje in historial:
-        rol = "Abogado" if mensaje["role"] == "user" else "LexPeru"
+        rol = "Abogado" if mensaje["role"] == "user" else "Intilex"
         lineas.append(f"{rol}: {mensaje['content']}")
 
     try:

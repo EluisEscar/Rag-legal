@@ -10,11 +10,30 @@ const REQUISITOS_PASSWORD = [
 ]
 
 function Icon({ name, size = 20 }) {
+  if (name === 'google') {
+    return (
+      <svg
+        aria-hidden="true"
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className="icon"
+      >
+        <path fill="#4285F4" d="M24 12.28c0-.85-.07-1.68-.21-2.48H12v4.7h6.63c-.29 1.54-1.16 2.84-2.48 3.73v3.13h3.97c2.32-2.14 3.66-5.29 3.66-9.08z" />
+        <path fill="#34A853" d="M12 24c3.31 0 6.09-1.1 8.11-2.98l-3.97-3.13c-1.1.74-2.51 1.17-4.14 1.17-3.18 0-5.87-2.15-6.83-5.04H1.05v3.23C3.1 21.05 7.15 24 12 24z" />
+        <path fill="#FBBC05" d="M5.17 14.02c-.25-.74-.39-1.54-.39-2.36s.14-1.62.39-2.36V6.07H1.05C.38 7.41 0 8.93 0 10.53s.38 3.12 1.05 4.46l4.12-3.23z" />
+        <path fill="#EA4335" d="M12 4.79c1.74 0 3.3.6 4.53 1.77l3.4-3.4C17.75 1.1 15.17 0 12 0 7.15 0 3.1 2.95 1.05 7.07l4.12 3.23c.96-2.89 3.65-5.04 6.83-5.04z" />
+      </svg>
+    )
+  }
+
   const paths = {
     scale: (
       <>
-        <path d="M12 3v18M7 21h10M5 6h14M7 6l-4 7h8L7 6ZM17 6l-4 7h8l-4-7Z" />
-        <path d="M3 13c.7 1.3 2 2 4 2s3.3-.7 4-2M13 13c.7 1.3 2 2 4 2s3.3-.7 4-2" />
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41" opacity="0.45" />
+        <path d="M12 6v13M9 19h6M6 9.5h12M8 9.5l-2 4h4ZM16 9.5l-2 4h4Z" />
       </>
     ),
     eye: (
@@ -85,7 +104,7 @@ export default function Login({ onLogin }) {
   const [modo, setModo] = useState('login')
   const [menuAbierto, setMenuAbierto] = useState(false)
   const [darkMode, setDarkMode] = useState(() => {
-    const temaGuardado = localStorage.getItem('lexperu:tema')
+    const temaGuardado = localStorage.getItem('intilex:tema')
     if (temaGuardado) return temaGuardado === 'dark'
     return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
   })
@@ -106,7 +125,7 @@ export default function Login({ onLogin }) {
 
   useEffect(() => {
     document.body.classList.toggle('dark', darkMode)
-    localStorage.setItem('lexperu:tema', darkMode ? 'dark' : 'light')
+    localStorage.setItem('intilex:tema', darkMode ? 'dark' : 'light')
   }, [darkMode])
 
   useEffect(() => {
@@ -187,7 +206,8 @@ export default function Login({ onLogin }) {
         })
 
       if (resultado.error) {
-        setError(traducirError(resultado.error.message))
+        console.warn('Error de autenticacion Supabase', resultado.error)
+        setError(traducirError(resultado.error))
       } else if (resultado.data.session) {
         onLogin(resultado.data.user)
       } else {
@@ -199,6 +219,28 @@ export default function Login({ onLogin }) {
       }
     } catch {
       setError('No pudimos conectar con el servicio. Inténtalo nuevamente.')
+    } finally {
+      setCargando(false)
+    }
+  }
+
+  const manejarGoogleLogin = async () => {
+    setError('')
+    setMensaje('')
+    setCargando(true)
+    try {
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin,
+        }
+      })
+      if (oauthError) {
+        console.warn('Error de OAuth Supabase', oauthError)
+        setError(traducirError(oauthError))
+      }
+    } catch {
+      setError('No se pudo iniciar la autenticación con Google. Inténtalo de nuevo.')
     } finally {
       setCargando(false)
     }
@@ -228,6 +270,7 @@ export default function Login({ onLogin }) {
         }}
         darkMode={darkMode}
         onToggleTheme={() => setDarkMode((actual) => !actual)}
+        onGoogleSubmit={manejarGoogleLogin}
       />
     )
   }
@@ -235,11 +278,11 @@ export default function Login({ onLogin }) {
   return (
     <div className="landing-page">
       <header className="landing-nav">
-        <a className="landing-brand" href="#inicio" aria-label="LexPerú, inicio">
+        <a className="landing-brand" href="#inicio" aria-label="Intilex, inicio">
           <span className="landing-brand-mark"><Icon name="scale" size={21} /></span>
           <span>
-            <strong>LexPerú</strong>
-            <small>Inteligencia jurídica</small>
+            <strong>Intilex</strong>
+            
           </span>
         </a>
 
@@ -280,9 +323,9 @@ export default function Login({ onLogin }) {
             </span>
             <h1>Investiga, analiza y conversa con tus documentos legales.</h1>
             <p className="hero-description">
-              LexPerú combina una base jurídica especializada con inteligencia
-              artificial para ayudarte a encontrar contexto, revisar PDFs y
-              organizar cada consulta en un solo espacio.
+              Intilex combina una base jurídica de alta precisión con inteligencia
+              artificial especializada en el derecho peruano para ayudarte a encontrar contexto,
+              analizar PDFs y organizar cada consulta en un solo espacio.
             </p>
             <div className="hero-actions">
               <button className="hero-primary" onClick={() => irAlAcceso('registro')}>
@@ -297,11 +340,11 @@ export default function Login({ onLogin }) {
             </div>
           </div>
 
-          <div className="product-preview" aria-label="Vista previa de LexPerú">
+          <div className="product-preview" aria-label="Vista previa de Intilex">
             <div className="preview-topbar">
               <div className="preview-brand">
                 <span><Icon name="scale" size={15} /></span>
-                LexPerú
+                Intilex
               </div>
               <span className="preview-status"><i /> Disponible</span>
             </div>
@@ -327,7 +370,7 @@ export default function Login({ onLogin }) {
                 <div className="preview-answer">
                   <span className="preview-avatar"><Icon name="scale" size={14} /></span>
                   <div>
-                    <strong>LexPerú</strong>
+                    <strong>Intilex</strong>
                     <p>
                       Revisaré las cláusulas relevantes y las contrastaré con
                       el marco laboral peruano aplicable.
@@ -360,7 +403,7 @@ export default function Login({ onLogin }) {
               Sube un PDF para analizarlo o pregunta directamente sobre derecho peruano.
             </Step>
             <Step number="02" icon="scale" title="Encuentra contexto">
-              LexPerú busca fragmentos relevantes y organiza la información útil.
+              Intilex busca fragmentos relevantes y organiza la información útil.
             </Step>
             <Step number="03" icon="chat" title="Continúa la conversación">
               Conserva cada historial, retoma preguntas y separa tus asuntos.
@@ -395,7 +438,7 @@ export default function Login({ onLogin }) {
               label="PROFESIONAL"
               title="Para trabajar sin límites"
               description="Más capacidad para profesionales y consultas frecuentes."
-              price="S/ 30"
+              price="S/ 20"
               period="por mes"
               features={[
                 'Todo lo incluido en Free',
@@ -403,7 +446,7 @@ export default function Login({ onLogin }) {
                 'Mayor capacidad de documentos',
                 'Acceso prioritario a nuevas funciones',
               ]}
-              button="Elegir Profesional"
+              button="En Proceso"
               onClick={() => irAlAcceso('registro')}
             />
           </div>
@@ -414,10 +457,10 @@ export default function Login({ onLogin }) {
       <footer className="landing-footer">
         <a className="landing-brand footer-brand" href="#inicio">
           <span className="landing-brand-mark"><Icon name="scale" size={18} /></span>
-          <span><strong>LexPerú</strong><small>Inteligencia jurídica</small></span>
+          <span><strong>Intilex</strong></span>
         </a>
         <p>Asistencia legal inteligente para profesionales y ciudadanos.</p>
-        <span>© 2026 LexPerú</span>
+        <span>© 2026 Intilex</span>
       </footer>
     </div>
   )
@@ -442,6 +485,7 @@ function AuthScreen({
   onBack,
   darkMode,
   onToggleTheme,
+  onGoogleSubmit,
 }) {
   return (
     <div className="auth-page">
@@ -583,10 +627,24 @@ function AuthScreen({
             <button className="login-btn" type="submit" disabled={cargando}>
               {cargando
                 ? 'Procesando...'
-                : modo === 'login' ? 'Ingresar a LexPerú' : 'Crear cuenta gratis'}
+                : modo === 'login' ? 'Ingresar a Intilex' : 'Crear cuenta gratis'}
               {!cargando && <Icon name="arrow" size={18} />}
             </button>
           </form>
+
+          <div className="auth-divider">
+            <span>o continuar con</span>
+          </div>
+
+          <button
+            type="button"
+            className="btn-google"
+            onClick={onGoogleSubmit}
+            disabled={cargando}
+          >
+            <Icon name="google" size={18} />
+            {modo === 'login' ? 'Conectarse con Google' : 'Registrarse con Google'}
+          </button>
 
           <p className="auth-legal">
             Las respuestas son orientativas y no reemplazan asesoría profesional.
@@ -646,7 +704,8 @@ function Plan({
   )
 }
 
-function traducirError(message) {
+function traducirError(error) {
+  const message = obtenerMensajeError(error)
   const normalizado = message.toLowerCase()
   if (normalizado.includes('invalid login credentials')) {
     return 'El correo o la contraseña no son correctos.'
@@ -660,5 +719,51 @@ function traducirError(message) {
   if (normalizado.includes('password')) {
     return 'La contraseña no cumple los requisitos de seguridad.'
   }
+  if (
+    normalizado.includes('no api key found') ||
+    normalizado.includes('apikey')
+  ) {
+    return 'No se encontró la clave pública de Supabase en el frontend. Reconstruye el contenedor y verifica SUPABASE_ANON_KEY.'
+  }
+  if (
+    normalizado === '{}' ||
+    normalizado.includes('failed to fetch') ||
+    normalizado.includes('network')
+  ) {
+    return 'No pudimos conectar con Supabase. Verifica la configuración del proyecto y vuelve a intentarlo.'
+  }
   return message
+}
+
+function obtenerMensajeError(error) {
+  if (!error) {
+    return 'No pudimos completar la autenticación.'
+  }
+
+  if (typeof error === 'string') {
+    return error
+  }
+
+  if (typeof error.message === 'string' && error.message.trim()) {
+    return error.message
+  }
+
+  if (typeof error.error_description === 'string' && error.error_description.trim()) {
+    return error.error_description
+  }
+
+  if (typeof error.error === 'string' && error.error.trim()) {
+    return error.error
+  }
+
+  try {
+    const serializado = JSON.stringify(error)
+    if (serializado && serializado !== '{}') {
+      return serializado
+    }
+  } catch {
+    // Ignoramos errores de serializacion para mostrar un fallback legible.
+  }
+
+  return 'No pudimos conectar con Supabase. Verifica la configuración del proyecto y vuelve a intentarlo.'
 }

@@ -1,12 +1,14 @@
 from dataclasses import dataclass
+import logging
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.repositories.client import supabase
+from app.repositories.client import supabase_auth
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -26,9 +28,13 @@ def get_current_user(
         )
 
     try:
-        response = supabase.auth.get_user(credentials.credentials)
+        response = supabase_auth.auth.get_user(credentials.credentials)
         user = getattr(response, "user", None)
     except Exception as error:
+        logger.warning(
+            "Supabase rechazo la validacion del token: %s",
+            error,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token invalido o expirado",

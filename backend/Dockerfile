@@ -9,8 +9,6 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-ARG HF_TOKEN
-ENV HF_TOKEN=${HF_TOKEN}
 RUN python -c "\
 import os; \
 from sentence_transformers import SentenceTransformer; \

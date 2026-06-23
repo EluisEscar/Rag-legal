@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import Login from './components/Login'
 import { authenticatedFetch, authenticatedJson } from './services/api'
 import { supabase } from './services/supabaseClient'
@@ -8,7 +9,7 @@ const API = 'http://localhost:8000'
 
 const MENSAJE_INICIAL = {
   rol: 'bot',
-  texto: 'Hola, soy tu asistente legal especializado en derecho peruano. Puedes hacerme consultas legales o subir un documento PDF para analizarlo.',
+  texto: 'Hola, soy Intilex, tu asistente legal inteligente especializado en derecho peruano. Puedes hacerme consultas sobre normativas, jurisprudencia o subir un documento PDF para que lo analicemos juntos. ¿En qué puedo ayudarte hoy?',
 }
 
 function formatearFecha(fecha) {
@@ -32,15 +33,15 @@ function convertirMensajes(historial) {
 }
 
 function claveConversacionActiva(userId) {
-  return `lexperu:conversacion-activa:${userId}`
+  return `intilex:conversacion-activa:${userId}`
 }
 
 function Icon({ name, size = 20 }) {
   const paths = {
     scale: (
       <>
-        <path d="M12 3v18M7 21h10M5 6h14M7 6l-4 7h8L7 6ZM17 6l-4 7h8l-4-7Z" />
-        <path d="M3 13c.7 1.3 2 2 4 2s3.3-.7 4-2M13 13c.7 1.3 2 2 4 2s3.3-.7 4-2" />
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41" opacity="0.45" />
+        <path d="M12 6v13M9 19h6M6 9.5h12M8 9.5l-2 4h4ZM16 9.5l-2 4h4Z" />
       </>
     ),
     chat:   <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v8Z" />,
@@ -121,7 +122,7 @@ export default function App() {
   const [subiendo,    setSubiendo]    = useState(false)
   const [darkMode,    setDarkMode]    = useState(
     () => {
-      const temaGuardado = localStorage.getItem('lexperu:tema')
+      const temaGuardado = localStorage.getItem('intilex:tema')
       if (temaGuardado) return temaGuardado === 'dark'
       return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
     }
@@ -221,7 +222,7 @@ export default function App() {
 
   useEffect(() => {
     document.body.classList.toggle('dark', darkMode)
-    localStorage.setItem('lexperu:tema', darkMode ? 'dark' : 'light')
+    localStorage.setItem('intilex:tema', darkMode ? 'dark' : 'light')
   }, [darkMode])
 
   useEffect(() => {
@@ -298,7 +299,7 @@ export default function App() {
   }
 
   // ── Enviar pregunta ──
-  const enviar = async () => {
+const enviar = async () => {
     if (!pregunta.trim() || cargando || cargandoHistorial) return
     const preguntaActual = pregunta
     setPregunta('')
@@ -321,47 +322,64 @@ export default function App() {
         method: 'POST',
         body: form,
       })
-      const data = await res.json()
 
       if (!res.ok) {
-        throw new Error(data.detail ?? data.error ?? 'Error del servidor')
+        const err = await res.json()
+        throw new Error(err.detail ?? err.error ?? 'Error del servidor')
       }
 
-      setMensajes((m) => [...m, {
-        rol:   'bot',
-        texto: data.error
-          ? data.error + (data.tip ? `\n\nSugerencia: ${data.tip}` : '')
-          : data.respuesta,
-      }])
-      const mensajesActuales = historialesCache.current.get(
-        conversacionId
-      ) ?? []
-      historialesCache.current.set(
-        conversacionId,
-        [
-          ...mensajesActuales,
-          mensajeUsuario,
-          {
-            rol: 'bot',
-            texto: data.error
-              ? data.error + (
-                data.tip ? `\n\nSugerencia: ${data.tip}` : ''
-              )
-              : data.respuesta,
-          },
-        ]
-      )
-      setConvs((actuales) => {
-        const activa = actuales.find((conv) => conv.id === conversacionId)
-        if (!activa) return actuales
-        return [
-          { ...activa, fecha: 'Hoy' },
-          ...actuales.filter((conv) => conv.id !== conversacionId),
-        ]
-      })
+      // ── STREAMING ──
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let respuestaAcumulada = ''
+
+      // Agrega burbuja vacía que iremos llenando
+      setMensajes((m) => [...m, { rol: 'bot', texto: '' }])
+      setCargando(false) // quitamos el "typing..." porque ya empieza a llegar texto
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const lineas = decoder.decode(value).split('\n').filter(Boolean)
+
+        for (const linea of lineas) {
+          const data = JSON.parse(linea)
+
+          if (data.tipo === 'chunk') {
+            respuestaAcumulada += data.texto
+            // Actualiza el último mensaje (la burbuja del bot)
+            const textoActual = respuestaAcumulada
+            setMensajes((m) => {
+              const copia = [...m]
+              copia[copia.length - 1] = { rol: 'bot', texto: textoActual }
+              return copia
+            })
+          }
+
+          if (data.tipo === 'fin') {
+            // Actualiza la caché local
+            const mensajesActuales = historialesCache.current.get(conversacionId) ?? []
+            historialesCache.current.set(conversacionId, [
+              ...mensajesActuales,
+              mensajeUsuario,
+              { rol: 'bot', texto: respuestaAcumulada },
+            ])
+            setConvs((actuales) => {
+              const activa = actuales.find((conv) => conv.id === conversacionId)
+              if (!activa) return actuales
+              return [
+                { ...activa, fecha: 'Hoy' },
+                ...actuales.filter((conv) => conv.id !== conversacionId),
+              ]
+            })
+          }
+        }
+      }
+
     } catch (error) {
       setMensajes((m) => [...m, {
-        rol:   'bot',
+        rol: 'bot',
         texto: `No se pudo completar la consulta: ${error.message}`,
       }])
     } finally {
@@ -547,8 +565,8 @@ export default function App() {
         <div className="sidebar-header">
           <div className="brand-mark"><Icon name="scale" size={22} /></div>
           <div className="brand-copy">
-            <p className="sidebar-title">LexPerú</p>
-            <p className="sidebar-subtitle">Inteligencia jurídica</p>
+            <p className="sidebar-title">Intilex</p>
+            <p className="sidebar-subtitle">RAG Legal Peruano</p>
           </div>
           <button
             className="mobile-close"
@@ -658,7 +676,7 @@ export default function App() {
               {archivo || convActivaObj?.titulo || 'Consulta legal'}
             </p>
             <p className="chat-header-sub">
-              {archivo ? 'Documento listo para consulta' : 'Asistente especializado en derecho peruano'}
+              {archivo ? 'Documento listo para consulta' : 'RAG Legal Peruano'}
             </p>
           </div>
           <span className="badge-online"><i /> Disponible</span>
@@ -696,14 +714,9 @@ export default function App() {
                 <div key={i} className="row-bot">
                   <div className="bot-avatar"><Icon name="scale" size={17} /></div>
                   <div className="message-content">
-                    <span className="message-author">LexPerú</span>
+                    <span className="message-author">Intilex</span>
                     <div className="bubble-bot">
-                      {m.texto.split('\n').map((linea, j, lines) => (
-                        <span key={j}>
-                          {linea}
-                          {j < lines.length - 1 && <br />}
-                        </span>
-                      ))}
+                      <ReactMarkdown>{m.texto}</ReactMarkdown>
                     </div>
                   </div>
                 </div>
@@ -764,7 +777,7 @@ export default function App() {
               </button>
             </div>
           </div>
-          <p className="legal-note">LexPerú puede cometer errores. Verifica la información legal relevante.</p>
+          <p className="legal-note">Intilex puede cometer errores de análisis. Verifica siempre la información jurídica relevante.</p>
         </footer>
       </main>
 

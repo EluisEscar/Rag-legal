@@ -12,6 +12,7 @@ from llama_index.core import Document, VectorStoreIndex
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.config import get_settings
+from app.core.validation import clean_filename
 from app.services.pdf import extraer_texto_pdf
 
 
@@ -32,6 +33,7 @@ async def subir_documento(
 ):
     session_id = current_user.id
     _validar_metadatos_pdf(archivo)
+    filename = clean_filename(archivo.filename)
     contenido = await _leer_archivo_limitado(archivo)
 
     if not contenido.startswith(b"%PDF-"):
@@ -43,7 +45,7 @@ async def subir_documento(
     sesion = await run_in_threadpool(
         _crear_sesion_documento,
         contenido,
-        archivo.filename,
+        filename,
         session_id,
     )
 
@@ -51,14 +53,14 @@ async def subir_documento(
 
     return {
         "ok": True,
-        "filename": archivo.filename,
+        "filename": filename,
         "session": session_id,
         "mensaje": "Documento listo para consultas",
     }
 
 
 def _validar_metadatos_pdf(archivo: UploadFile) -> None:
-    filename = archivo.filename or ""
+    filename = clean_filename(archivo.filename)
     if not filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

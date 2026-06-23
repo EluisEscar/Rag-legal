@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.core.auth import CurrentUser, get_current_user
+from app.core.validation import clean_required_uuid
 
 
 router = APIRouter(prefix="/sesiones", tags=["sesiones"])
@@ -28,6 +29,7 @@ def eliminar_sesion(
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    session_id = clean_required_uuid(session_id, field="session_id")
     if session_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

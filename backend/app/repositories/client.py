@@ -7,8 +7,18 @@ def get_supabase() -> Client:
     settings = get_settings()
     return create_client(
         settings.supabase_url,
-        settings.supabase_key,
+        settings.supabase_service_key,
     )
 
+
+def get_supabase_auth() -> Client:
+    settings = get_settings()
+    return create_client(
+        settings.supabase_url,
+        settings.supabase_anon_key,
+    )
+
+
 supabase = get_supabase()
+supabase_auth = get_supabase_auth()
 
