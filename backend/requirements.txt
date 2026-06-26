@@ -5,6 +5,8 @@ python-multipart
 pymupdf
 numpy
 groq
+langchain-core
+langgraph
 supabase==1.2.0
 sentence-transformers==2.7.0
 transformers==4.40.0

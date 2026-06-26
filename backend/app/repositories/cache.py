@@ -54,6 +54,7 @@ def generar_clave_cache(
     pregunta: str,
     user_id: str,
     historial: list | None = None,
+    modo: str = "rag",
 ) -> str:
     partes_contexto = [
         mensaje["content"].strip()
@@ -64,6 +65,7 @@ def generar_clave_cache(
     contenido = "|".join(
         [
             user_id,
+            modo,
             pregunta.strip().lower(),
             contexto,
         ]

@@ -318,7 +318,7 @@ const enviar = async () => {
       form.append('pregunta', preguntaActual)
       form.append('conversacion_id', conversacionId)
 
-      const res = await authenticatedFetch(`${API}/preguntar`, {
+      const res = await authenticatedFetch(`${API}/preguntar-agente`, {
         method: 'POST',
         body: form,
       })
@@ -676,7 +676,9 @@ const enviar = async () => {
               {archivo || convActivaObj?.titulo || 'Consulta legal'}
             </p>
             <p className="chat-header-sub">
-              {archivo ? 'Documento listo para consulta' : 'RAG Legal Peruano'}
+              {archivo
+                ? 'Agente legal con documento'
+                : 'Agente legal con razonamiento'}
             </p>
           </div>
           <span className="badge-online"><i /> Disponible</span>

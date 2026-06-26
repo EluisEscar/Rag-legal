@@ -28,8 +28,8 @@ def _generar_embedding(
     return _embedding_cache[texto]
 
 
-def _namespace(user_id: str) -> str:
-    return f"user:{user_id}|"
+def _namespace(user_id: str, modo: str = "rag") -> str:
+    return f"user:{user_id}|{modo}|"
 
 
 def buscar_cache_semantico(
@@ -37,13 +37,14 @@ def buscar_cache_semantico(
     user_id: str,
     modelo: EmbeddingPersonalizado,
     threshold: float = 0.85,
+    modo: str = "rag",
 ) -> str | None:
     try:
         vector_pregunta = _generar_embedding(
             modelo,
             pregunta.strip().lower(),
         )
-        namespace = _namespace(user_id)
+        namespace = _namespace(user_id, modo)
         resultado = (
             supabase.table("cache_semantico")
             .select("id, pregunta, respuesta")
@@ -85,12 +86,13 @@ def guardar_cache_semantico(
     pregunta: str,
     respuesta: str,
     user_id: str,
+    modo: str = "rag",
 ) -> None:
     try:
         supabase.table("cache_semantico").insert(
             {
                 "pregunta": (
-                    f"{_namespace(user_id)}"
+                    f"{_namespace(user_id, modo)}"
                     f"{pregunta.strip().lower()}"
                 ),
                 "respuesta": respuesta,
