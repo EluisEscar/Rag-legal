@@ -10,7 +10,6 @@ from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 
 from app.core.config import get_settings
-from app.repositories.client import supabase
 from app.services.embeddings import EmbeddingPersonalizado
 from app.services.session_store import SessionStore
 
@@ -63,7 +62,6 @@ async def lifespan(app: FastAPI):
 
     app.state.groq = Groq(api_key=settings.groq_api_key)
     app.state.embedding_model = embedding_model
-    app.state.supabase = supabase
     app.state.sesiones = SessionStore(
         max_sessions=settings.max_sessions,
         ttl_seconds=settings.session_ttl_seconds,

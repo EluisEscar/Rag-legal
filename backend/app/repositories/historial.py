@@ -168,22 +168,6 @@ def guardar_resumen(
         _raise_repository_error("guardar el resumen", error)
 
 
-def obtener_resumen(conversacion_id: str) -> str:
-    try:
-        resultado = (
-            supabase.table("conversaciones")
-            .select("resumen")
-            .eq("id", conversacion_id)
-            .execute()
-        )
-    except Exception as error:
-        _raise_repository_error("obtener el resumen", error)
-
-    if resultado.data and resultado.data[0].get("resumen"):
-        return resultado.data[0]["resumen"]
-    return ""
-
-
 def _raise_repository_error(action: str, error: Exception):
     logger.exception("No se pudo %s", action)
     raise RepositoryError(f"No se pudo {action}") from error

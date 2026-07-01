@@ -12,7 +12,7 @@ from app.core.lifespan import lifespan
 from app.core.config import get_settings
 from app.core.errors import RepositoryError
 from app.core.rate_limit import RateLimitMiddleware
-
+from app.api.scraper import router as scraper_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,7 +46,7 @@ app.include_router(documentos_router)
 app.include_router(preguntas_router)
 app.include_router(sesiones_router)
 app.include_router(conversaciones_router)
-
+app.include_router(scraper_router)
 
 @app.exception_handler(RepositoryError)
 async def repository_error_handler(

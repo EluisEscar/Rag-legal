@@ -40,7 +40,7 @@ def clasificar_pregunta(pregunta: str) -> str:
     """
     Clasifica la pregunta como 'simple' o 'compleja'.
     Simple  → llama-3.1-8b-instant   (rápido, menos tokens)
-    Compleja → llama-3.3-70b-versatile (mejor razonamiento)
+    Compleja → qwen/qwen3.6-27b (mejor razonamiento)
     """
     pregunta_lower = pregunta.lower().strip()
 
@@ -71,4 +71,4 @@ def elegir_modelo(pregunta: str) -> tuple[str, str]:
     if tipo == "simple":
         return "llama-3.1-8b-instant", "simple"
     else:
-        return "llama-3.3-70b-versatile", "compleja"
+        return "qwen/qwen3.6-27b", "compleja"

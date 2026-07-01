@@ -15,5 +15,6 @@ llama-index-embeddings-huggingface==0.2.3
 llama-index-vector-stores-qdrant==0.2.8
 qdrant-client==1.9.2
 huggingface_hub
+beautifulsoup4
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.2.2+cpu

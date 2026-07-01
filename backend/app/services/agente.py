@@ -1,12 +1,14 @@
 import json
 import re
-from typing import Any, Optional, TypedDict
+import asyncio
+from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
 from app.services.clasificador import elegir_modelo
 from app.services.prompts import construir_contexto, construir_prompt
 
+from app.services.scraper_peruano import buscar_normas_peruano, formatear_contexto_normas
 
 MODELO_CONTROL = "llama-3.1-8b-instant"
 RESPUESTA_NO_LEGAL = "Solo puedo responder consultas sobre derecho peruano."
@@ -20,7 +22,6 @@ class EstadoLegal(TypedDict, total=False):
     respuesta:            str
     es_valida:            bool
     necesita_mas_info:    bool
-    pregunta_aclaratoria: Optional[str]
     historial:            list
     tiene_documento:      bool
     tipo_pregunta:        str
@@ -135,34 +136,14 @@ Formato:
     return {"necesita_mas_info": necesita_mas_info}
 
 
-# ── Nodo 5: Pedir información aclaratoria ──
-def pedir_info(state: EstadoLegal) -> EstadoLegal:
-    prompt = f"""
-Genera una sola pregunta aclaratoria breve para un abogado peruano.
-Debe pedir el dato minimo necesario para poder responder mejor.
-No uses listas ni explicaciones. Solo la pregunta.
-
-Consulta: {state["pregunta_original"]}
-"""
-    pregunta = _limpiar_linea(
-        _llm_text(state["groq_client"], prompt, max_tokens=80)
-    )
-    if not pregunta:
-        pregunta = "¿Podrias precisar los hechos, fechas o documento aplicable?"
-    return {
-        "pregunta_aclaratoria": pregunta,
-        "respuesta":            pregunta,
-    }
-
-
-# ── Nodo 6: Generar respuesta final ──
+# ── Nodo 5: Generar respuesta final ──
 def responder(state: EstadoLegal) -> EstadoLegal:
     chunks = state.get("chunks", [])
-    if not chunks:
+    contexto = state.get("contexto") or construir_contexto(chunks)
+    if not chunks and not contexto:
         return {"respuesta": "No encontre informacion relevante."}
 
     pregunta = state.get("pregunta_mejorada") or state["pregunta_original"]
-    contexto = state.get("contexto") or construir_contexto(chunks)
 
     mensajes = [
         {
@@ -192,32 +173,73 @@ def responder(state: EstadoLegal) -> EstadoLegal:
     }
 
 
-# ── Nodo 7: Respuesta para consultas no legales ──
+# ── Nodo 6: Respuesta para consultas no legales ──
 def no_legal(state: EstadoLegal) -> EstadoLegal:
     return {"respuesta": RESPUESTA_NO_LEGAL}
 
+def buscar_peruano(state: EstadoLegal) -> EstadoLegal:
+    """
+    Busca normas recientes en El Peruano cuando el contexto
+    de Qdrant es insuficiente.
+    Solo se activa si necesita_mas_info = True.
+    """
+    print("📰 Buscando en El Peruano...")
+
+    pregunta = state.get("pregunta_mejorada") or state["pregunta_original"]
+
+    try:
+        # Ejecutar scraping asíncrono desde contexto síncrono
+        normas = asyncio.run(
+            buscar_normas_peruano(pregunta, max_resultados=3)
+        )
+
+        if normas:
+            contexto_peruano = formatear_contexto_normas(normas)
+            contexto_actual  = state.get("contexto", "")
+            chunks_actuales = state.get("chunks", [])
+
+            print(f"   ✅ {len(normas)} normas encontradas en El Peruano")
+
+            return {
+                "contexto":          contexto_actual + "\n\n" + contexto_peruano,
+                "chunks": chunks_actuales + [
+                    {
+                        "texto": contexto_peruano,
+                        "score": None,
+                        "filename": "El Peruano",
+                        "fuente": "El Peruano",
+                    },
+                ],
+                "necesita_mas_info": False,
+            }
+        else:
+            print("   ⚠ Sin resultados en El Peruano")
+
+    except Exception as e:
+        print(f"   ⚠ Error en scraper: {e}")
+
+    return {}
 
 # ── Decisiones del grafo ──
 def ruta_validacion(state: EstadoLegal) -> str:
     return "es_legal" if state.get("es_valida") else "no_es_legal"
 
 def ruta_contexto(state: EstadoLegal) -> str:
-    if state.get("necesita_mas_info") and not state.get("tiene_documento"):
-        return "pedir_info"
+    if state.get("necesita_mas_info"):
+        return "buscar_peruano"
     return "responder"
-
 
 # ── Construir el grafo ──
 def construir_agente():
     graph = StateGraph(EstadoLegal)
 
-    graph.add_node("validar",           validar)
-    graph.add_node("reescribir",        reescribir)
+    graph.add_node("validar",            validar)
+    graph.add_node("reescribir",         reescribir)
     graph.add_node("recuperar_contexto", recuperar_contexto)
-    graph.add_node("evaluar_contexto",  evaluar_contexto)
-    graph.add_node("pedir_info",        pedir_info)
-    graph.add_node("responder",         responder)
-    graph.add_node("no_legal",          no_legal)
+    graph.add_node("evaluar_contexto",   evaluar_contexto)
+    graph.add_node("buscar_peruano",     buscar_peruano)  # ← nuevo
+    graph.add_node("responder",          responder)
+    graph.add_node("no_legal",           no_legal)
 
     graph.set_entry_point("validar")
 
@@ -230,28 +252,29 @@ def construir_agente():
         },
     )
 
-    graph.add_edge("reescribir",        "recuperar_contexto")
+    graph.add_edge("reescribir",         "recuperar_contexto")
     graph.add_edge("recuperar_contexto", "evaluar_contexto")
 
+    # Nueva ruta: si necesita más info → buscar en El Peruano primero
     graph.add_conditional_edges(
         "evaluar_contexto",
         ruta_contexto,
         {
-            "pedir_info": "pedir_info",
-            "responder":  "responder",
+            "buscar_peruano": "buscar_peruano",  # ← nuevo
+            "responder":      "responder",
         },
     )
 
-    graph.add_edge("pedir_info", END)
+    # Después de buscar en El Peruano → responder directamente
+    graph.add_edge("buscar_peruano", "responder")
+
     graph.add_edge("responder",  END)
     graph.add_edge("no_legal",   END)
 
     return graph.compile()
 
-
 # Instancia global del agente
 agente_legal = construir_agente()
-
 
 # ── Helpers privados ──
 def _llm_text(groq_client, prompt: str, max_tokens: int = 120) -> str:
